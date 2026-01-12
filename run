@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+# calendar-notifications cli - run file with argparse
+# commands: start, list, show, test, lint, check, test-zoom
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+# add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+TEST_OUT = Path("output/testing")
+
+
+# ##################################################################
+# run shell command
+# executes a shell command and returns the exit code
+def run_shell(cmd: list[str]) -> int:
+    return subprocess.call(cmd)
+
+
+# ##################################################################
+# command start
+# starts the calendar notification daemon in foreground
+def command_start(_args: argparse.Namespace) -> int:
+    from daemon import run_daemon
+    return run_daemon()
+
+
+# ##################################################################
+# command list
+# lists upcoming zoom meetings
+def command_list(_args: argparse.Namespace) -> int:
+    from daemon import list_upcoming_zoom_meetings
+    return list_upcoming_zoom_meetings()
+
+
+# ##################################################################
+# command test
+# runs a specific test target
+def command_test(args: argparse.Namespace) -> int:
+    TEST_OUT.mkdir(parents=True, exist_ok=True)
+    target = args.target
+    log_name = target.replace("/", "_").replace("::", "_") + ".log"
+    log_path = TEST_OUT / log_name
+
+    cmd = ["python", "-m", "pytest", "-v", target, "--maxfail=1"]
+    print(f"Running: {' '.join(cmd)}")
+    print(f"Log: {log_path}")
+
+    with open(log_path, "w") as log_file:
+        result = subprocess.run(cmd, stdout=log_file, stderr=subprocess.STDOUT)
+
+    # also print to console
+    with open(log_path, "r") as log_file:
+        print(log_file.read())
+
+    return result.returncode
+
+
+# ##################################################################
+# command lint
+# runs the linter on all source files
+def command_lint(_args: argparse.Namespace) -> int:
+    return run_shell(["ruff", "check", "--line-length", "120", "src/"])
+
+
+# ##################################################################
+# command check
+# runs dazpycheck for full suite and quality gates
+def command_check(_args: argparse.Namespace) -> int:
+    return run_shell(["dazpycheck"])
+
+
+# ##################################################################
+# command test zoom
+# gets the next zoom meeting and tries to launch it
+def command_test_zoom(_args: argparse.Namespace) -> int:
+    from colorama import Fore, Style, init as colorama_init
+    from calendar_access import get_events_next_week
+    from zoom_parser import extract_zoom_from_event
+    from zoom_launcher import launch_zoom_meeting
+
+    colorama_init(autoreset=True)
+
+    print(f"{Fore.CYAN}Finding next Zoom meeting...{Style.RESET_ALL}")
+
+    events = get_events_next_week()
+    next_zoom = None
+    next_meeting = None
+
+    for event in events:
+        meeting = extract_zoom_from_event(event)
+        if meeting:
+            next_zoom = event
+            next_meeting = meeting
+            break
+
+    if not next_zoom or not next_meeting:
+        print(f"{Fore.RED}No Zoom meetings found in the next 7 days{Style.RESET_ALL}")
+        return 1
+
+    print(f"{Fore.GREEN}Found:{Style.RESET_ALL} {next_zoom.title}")
+    print(f"  Start: {next_zoom.start_time.strftime('%a %b %d %I:%M %p')}")
+    print(f"  Meeting ID: {next_meeting.meeting_id}")
+    print(f"  Original URL: {next_meeting.original_url}")
+    print(f"  ZoomMTG URL: {next_meeting.zoommtg_url}")
+    print()
+    print(f"{Fore.YELLOW}Launching Zoom...{Style.RESET_ALL}")
+
+    success = launch_zoom_meeting(next_meeting)
+
+    if success:
+        print(f"{Fore.GREEN}Zoom launched successfully{Style.RESET_ALL}")
+        return 0
+    else:
+        print(f"{Fore.RED}Failed to launch Zoom{Style.RESET_ALL}")
+        return 1
+
+
+# ##################################################################
+# main
+# parses arguments and dispatches to the correct command
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="run",
+        description="Calendar Notifications CLI"
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # start command
+    p_start = sub.add_parser("start", help="Start the notification daemon")
+    p_start.set_defaults(func=command_start)
+
+    # list command
+    p_list = sub.add_parser("list", help="List upcoming Zoom meetings")
+    p_list.set_defaults(func=command_list)
+
+    # show command (alias for list)
+    p_show = sub.add_parser("show", help="Show upcoming Zoom meetings (alias for list)")
+    p_show.set_defaults(func=command_list)
+
+    # test command
+    p_test = sub.add_parser("test", help="Run a specific test target")
+    p_test.add_argument("target", help="e.g. src/calendar_access_test.py::test_get_event_store")
+    p_test.set_defaults(func=command_test)
+
+    # lint command
+    p_lint = sub.add_parser("lint", help="Run linter on source files")
+    p_lint.set_defaults(func=command_lint)
+
+    # check command
+    p_check = sub.add_parser("check", help="Run full test suite and quality gates (dazpycheck)")
+    p_check.set_defaults(func=command_check)
+
+    # test-zoom command
+    p_test_zoom = sub.add_parser("test-zoom", help="Launch Zoom with the next upcoming meeting")
+    p_test_zoom.set_defaults(func=command_test_zoom)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+# ##################################################################
+# standard python dispatch
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
