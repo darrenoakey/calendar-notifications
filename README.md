@@ -111,3 +111,7 @@ Zoom launched successfully
 - Python 3.x
 - Zoom desktop application installed
 - Calendar access permission granted to Terminal/your IDE
+
+## License
+
+This project is licensed under [CC BY-NC 4.0](https://darren-static.waft.dev) - free to use and modify, but no commercial use without permission.
